@@ -1,0 +1,167 @@
+# This is a basic workflow to help you get started with Actions
+
+name: Create ipset configs
+
+# Controls when the action will run. Triggers the workflow on push or pull request
+on:
+  workflow_dispatch:
+  schedule:
+    # * is a special character in YAML so you have to quote this string
+    - cron: '20 20 * * *'
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # The "build" workflow
+  Creating_list:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-22.04
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+    # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+    - uses: actions/checkout@v4
+
+    - name: Settings DoT DNS with systemd-resolved
+      run: |
+       sudo apt update
+       sudo apt install -y bind9-dnsutils sudo --no-install-suggests
+       sudo mkdir -pv /etc/systemd/resolved.conf.d/
+       echo -e "[Resolve]\nDNS=8.8.4.4#dns.google\nFallbackDNS=\nDNSOverTLS=yes\nDNSSEC=yes\nCache=yes\nCacheFromLocalhost=yes\nReadEtcHosts=no" | sudo tee /etc/systemd/resolved.conf.d/google.conf &>/dev/null;
+       echo -e "[Resolve]\nDNS=1.0.0.1#1dot1dot1dot1.cloudflare-dns.com\nFallbackDNS=\nDNSOverTLS=yes\nDNSSEC=yes\nCache=yes\nCacheFromLocalhost=yes\nReadEtcHosts=no" | sudo tee /etc/systemd/resolved.conf.d/cloudflare.conf &>/dev/null;
+       cat /etc/systemd/resolved.conf.d/google.conf
+       echo ""
+       cat /etc/systemd/resolved.conf.d/cloudflare.conf
+       echo ""
+       echo "nameserver 127.0.0.53" | sudo tee /etc/resolv.conf.DNSoverride &>/dev/null;
+       sudo ln -svf /etc/resolv.conf.DNSoverride /etc/resolv.conf
+       cat -n /etc/resolv.conf
+       echo ""
+       cat -n /etc/hosts
+       echo ""
+       sudo systemctl restart systemd-resolved.service
+       nc -z -v 127.0.0.53 53 && echo ""
+
+    - name: Test DNS-query
+      run: |
+       nslookup -type=A google.com
+       echo ""
+       dig google.com A
+
+    - name: Install dependencies for start script
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+       sudo apt install -y git bash coreutils util-linux ccache dos2unix sudo language-pack-ru language-pack-en locales moreutils --no-install-suggests
+       sudo sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && \
+       sudo sed -i -e 's/# ru_RU.UTF-8 UTF-8/ru_RU.UTF-8 UTF-8/' /etc/locale.gen && \
+       sudo locale-gen --no-purge en_US.UTF-8 ru_RU.UTF-8 && \
+       sudo apt install -y ipset ipset-persistent iptables iptables-persistent wget libarchive-tools zstd zip unzip curl grepcidr parallel diffutils busybox-static xterm python3-netaddr python-is-python3 --no-install-suggests && \
+       dos2unix requirements.txt
+
+#    - name: Set up Python
+#      uses: actions/setup-python@v5
+#      with:
+#          python-version: '3.12'
+
+#    - name: Cache pip
+#      uses: actions/cache@v4
+#      with:
+#          path: ~/.cache/pip
+#          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+#          restore-keys: |
+#            ${{ runner.os }}-pip-
+#            ${{ runner.os }}-
+
+ #   - name: Install dependencies
+ #     run: |
+ #         pip install -r requirements.txt
+
+    - shell: bash
+      env:
+        TOKEN: ${{ secrets.PERSONAL_TOKEN }}
+        URL: ${{ secrets.URL_PRIVATE }}
+      run: |
+        curl --max-time 120 --retry-delay 3 --retry 10 -4s -H "Authorization: token ${TOKEN}" -# ${URL} | tee ./ipdeny-update.sh &>/dev/null
+
+    - name: Pre-start and start bash script
+      env:
+        PATH: /usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games:/usr/sbin
+      run: |
+        chmod -c 755 ipdeny-update.sh && sudo WORKFLOW=yes ./ipdeny-update.sh && \
+        cp -vf /etc/iptables/ipsets ./ipset.conf && \
+        dos2unix ./ipset.conf
+
+    - name: Create for Mat1RX ipset.conf
+      run: |
+        curl --max-time 120 --retry-delay 3 --retry 10 -4s -# https://raw.githubusercontent.com/herrbischoff/country-ip-blocks/master/ipv4/ru.cidr | sudo tee /tmp/ru.txt &>/dev/null
+        if [[ -f /tmp/ru.txt ]]; then
+        if [[ -s /tmp/ru.txt ]]; then
+          echo -e "\e[1;33mNo empty ru.txt...\033[0m"
+          sudo truncate -s 0 /etc/iptables/ipsets
+          sudo cp -f ./ipset.conf /etc/iptables/ipsets
+          sudo systemctl restart ipset.service
+          sudo ipset -N RU hash:net
+          for RU in $(cat /tmp/ru.txt | sort -u ); do sudo ipset -A RU "$RU";done
+          sudo truncate -s 0 /etc/iptables/ipsets
+          sudo ipset save | sudo tee /etc/iptables/ipsets &>/dev/null
+          sudo systemctl restart ipset.service
+          cp -vf /etc/iptables/ipsets ./ipset_Mat1RX.conf
+          dos2unix ./ipset_Mat1RX.conf
+        fi
+        fi
+
+    - name: Check pre-commit ipset.conf
+      run: |
+        if [[ -s ./ipset.conf ]]; then
+          echo -e "\e[1;33mNo empty ipset.conf...\033[0m"
+          else
+          echo "Empty... Error. Exit"
+          exit 1
+        fi
+  
+    - uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+          commit_message: "Auto-update ipset.conf"
+          file_pattern: 'ipset.conf'
+          commit_options: "--no-verify"
+          repository: .
+          commit_user_name: github-actions[bot]
+          commit_user_email: github-actions[bot]@users.noreply.github.com
+          commit_author: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+    
+    - name: Check pre-commit ipset_Mat1RX.conf
+      run: |
+        if [[ -s ./ipset.conf ]]; then
+          echo -e "\e[1;33mNo empty ipset_Mat1RX.conf...\033[0m"
+          else
+          echo "Empty... Error. Exit"
+          exit 1
+        fi
+
+    - uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+          commit_message: "Auto-update ipset_Mat1RX.conf for Mat1RX"
+          file_pattern: 'ipset_Mat1RX.conf'
+          commit_options: "--no-verify"
+          repository: .
+          commit_user_name: github-actions[bot]
+          commit_user_email: github-actions[bot]@users.noreply.github.com
+          commit_author: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+
+    - shell: bash
+      env:
+        TERM: xterm-256color
+      run: sudo diff -uwbsa --color=auto /var/debug/Spamhaus_CIDR.txt.original /var/debug/Spamhaus.txt || true
+
+    - shell: bash
+      env:
+        TERM: xterm-256color
+      run: for countries in {cn,ir,ae,za,hk,lt,tm,tw,ua}; do echo "" && sudo diff -uwbsa --color=auto /var/debug/"$countries".cidr.original /var/debug/"$countries".cidr.change || true; done
+
+#    - name: Smart Diff
+#      uses: LouisBrunner/diff-action@v0.3.0
+#      with:
+#        old: /var/debug/Spamhaus_CIDR.txt.original
+#        new: /var/debug/Spamhaus.txt
+#        mode: addition
+#        tolerance: mixed-worse
