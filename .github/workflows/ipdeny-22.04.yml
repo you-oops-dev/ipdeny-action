@@ -102,7 +102,7 @@ jobs:
 
     - name: Create for Mat1RX ipset.conf
       run: |
-        curl --max-time 120 --retry-delay 3 --retry 10 -4s -# https://raw.githubusercontent.com/herrbischoff/country-ip-blocks/master/ipv4/ru.cidr | sudo tee /tmp/ru.txt &>/dev/null
+        curl --max-time 120 --retry-delay 3 --retry 10 -4s -# https://herrbischoff.com/code/me/country-ip-blocks/raw/branch/master/ipv4/ru.cidr | sudo tee /tmp/ru.txt &>/dev/null
         if [[ -f /tmp/ru.txt ]]; then
         if [[ -s /tmp/ru.txt ]]; then
           echo -e "\e[1;33mNo empty ru.txt...\033[0m"
